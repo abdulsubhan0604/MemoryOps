@@ -1,11 +1,14 @@
 import os
 import json
 import logging
+from pathlib import Path
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from dotenv import load_dotenv
 
-load_dotenv()
+# Ensure .env is explicitly loaded from backend directory
+env_path = Path(__file__).parent / ".env"
+load_dotenv(dotenv_path=env_path)
 
 logger = logging.getLogger("memoryops.hindsight")
 
@@ -38,17 +41,22 @@ class HindsightService:
         try:
             from hindsight_client import Hindsight
             
-            kwargs = {}
-            if self.api_url:
-                kwargs["base_url"] = self.api_url
-            if self.api_key:
-                kwargs["api_key"] = self.api_key
+            # Pass base_url and optional api_key directly into Hindsight constructor
+            self.client = Hindsight(
+                base_url=self.api_url,
+                api_key=self.api_key if self.api_key else None
+            )
+            
+            # Connected is True only if API key is present for Cloud, or targeting local server
+            if self.api_key or "localhost" in self.api_url or "127.0.0.1" in self.api_url:
+                self.is_connected = True
+            else:
+                self.is_connected = False
+                logger.warning("HINDSIGHT_API_KEY is not set in backend/.env. Hindsight Cloud calls will require API key.")
                 
-            self.client = Hindsight(**kwargs)
-            self.is_connected = True
-            logger.info(f"Hindsight client initialized targeting bank: {self.bank_id}")
+            logger.info(f"Hindsight client initialized (URL: {self.api_url}, Bank: {self.bank_id}, Key configured: {bool(self.api_key)})")
         except Exception as e:
-            logger.warning(f"Could not connect to Hindsight Cloud/Server: {e}. Falling back to in-memory store.")
+            logger.warning(f"Could not initialize Hindsight client: {e}. Falling back to in-memory store.")
             self.is_connected = False
             self.client = None
 
@@ -100,7 +108,7 @@ class HindsightService:
         sdk_success = False
         sdk_error = None
 
-        if self.client:
+        if self.client and self.api_key:
             try:
                 # Call official Hindsight retain SDK method
                 self.client.retain(
@@ -113,6 +121,8 @@ class HindsightService:
             except Exception as e:
                 sdk_error = str(e)
                 logger.error(f"Hindsight SDK retain failed: {e}. Stored in local fallback.")
+        elif self.client:
+            sdk_error = "HINDSIGHT_API_KEY is not set in backend/.env. Hindsight Cloud returned 401 Unauthorized."
 
         return {
             "status": "success",
@@ -130,8 +140,8 @@ class HindsightService:
         """
         recalled_memories: List[Dict[str, Any]] = []
 
-        # 1. Attempt official SDK recall if client is connected
-        if self.client:
+        # 1. Attempt official SDK recall if API key is configured or client is connected
+        if self.client and self.api_key:
             try:
                 raw_results = self.client.recall(
                     bank_id=self.bank_id,
@@ -243,8 +253,9 @@ class HindsightService:
     def check_health(self) -> Dict[str, Any]:
         """Returns health status of Hindsight service integration."""
         return {
-            "status": "healthy" if (self.is_connected or len(self._local_memory_bank) >= 0) else "degraded",
+            "status": "healthy" if self.is_connected else "unauthenticated",
             "hindsight_cloud_connected": self.is_connected,
             "bank_id": self.bank_id,
+            "api_key_configured": bool(self.api_key),
             "local_memory_count": len(self._local_memory_bank)
         }

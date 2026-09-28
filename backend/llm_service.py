@@ -1,10 +1,13 @@
 import os
 import json
 import logging
+from pathlib import Path
 from typing import Dict, Any, List, Optional
 from dotenv import load_dotenv
 
-load_dotenv()
+# Ensure .env is explicitly loaded from backend directory
+env_path = Path(__file__).parent / ".env"
+load_dotenv(dotenv_path=env_path)
 
 logger = logging.getLogger("memoryops.llm")
 
